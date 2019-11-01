@@ -1,8 +1,12 @@
 
+#### caterpillar species richness from CFIS surveys ####
+# goals - map species richness
+# calculate richness across ecoregions
+# determine total number of sites based on spatial aggregation of species occurrences
+# interpolate richness across full range
+# experiment with different map styles and resolutions
 
-## plot combined sf object
-
-# color points by species
+#### prelims ####
 library(viridis)
 library(sf)
 library(rmapshaper)
@@ -11,50 +15,40 @@ library(tidyverse)
 library(units)
 library(jcolors)
 
-### making chlorpleth maps
 
-# read in ecoregion shapefiles
-list.files('~/Dropbox/CFIS maps/shapefiles')
+#### read in shapefiles #####
 
 # Canada Lambert conformal conic
 lcc<-'+proj=lcc +lat_1=50 +lat_2=70 +lat_0=40 +lon_0=-96 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs'
 
 # canada country boundary
 can.simp<-st_read('/Users/collnell/Dropbox/CFIS maps/canada map/can_simplen.shp')%>%st_transform(lcc) # simplified outline of canada
-outline<-can.simp%>%group_by()%>%summarize()%>%ms_simplify(keep=0.01)
-
-ggplot()+
-  geom_sf(data=outline, fill=NA)+
-  theme_map()
-
-
-ggsave('~/Dropbox/CFIS maps/maps/ecozone.pdf', width=7, height=5)
+outline<-can.simp%>%group_by()%>%summarize()%>%ms_simplify(keep=0.01) # outline of country simplified
 
 # vegetation delineations
-
+# read in and trim to terrestrial only, simplify 
 ecoz<-st_read('/Users/collnell/Dropbox/Projects/canada/Ecozones/Ecozones.shp')%>%
   dplyr::select(-ZONE_NOM)%>%st_transform(lcc)%>%ms_simplify(keep=0.15)%>%st_intersection(outline)%>%select(ecozone=ZONE_NAME)# convert to Canada Lambert Conformal Conic CRS
 ecor<-st_read('~/Dropbox/CFIS maps//Ecoregions/ecoregions.shp')%>%st_transform(lcc)%>%ms_simplify(keep=0.15)%>%st_intersection(outline)%>%select(ecoregion=REGION_NAM) ## the ecoregion delinations
 ecop<-st_read('~/Dropbox/CFIS maps/Ecoprovinces/ecoprovinces.shp')%>%st_transform(lcc)%>%ms_simplify(keep=0.15)%>%st_intersection(outline)%>%select(ecoprovince=ECOPROVINC)
-glimpse(ecoz)
 
-## combine all 3 in the hierarchjy
+## combine all 3 in the hierarchy
 eco.all<-ecor%>%st_join(ecop)%>%st_join(ecoz)%>%
-  dplyr::select(ecoprovince=ECOPROVINC, ecoregion=REGION_NAM, ecozone=ZONE_NAME)%>%
   group_by(ecozone, ecoregion)%>%summarize()
 glimpse(eco.all)
 
+# simple plot of ecozones
 ggplot()+
   geom_sf(data=eco.all, aes(fill=ecozone), color='white',size=.5)+
   geom_sf(data=outline, fill=NA, color='black')+
   theme_map()+
-  theme(legend.position='top')+
-  scale_fill_manual(values=pal_new)
+  theme(legend.position='top')
 
+
+## ntesting new color palettes for gradient scales
 display_all_jcolors()
 display_all_jcolors_contin()
 display_jcolors('pal8')
-jcolors_contin
 pal2 <- c("#1a1334", "#26294a", "#01545a", "#017351", "#03c383", 
           "#aad962")
 pal10 <- c("#3e71a8", "#577f9f", "#698e96", "#779d8d", "#84ad83", 
@@ -66,18 +60,30 @@ pal12 <- c("#202547", "#43444a", "#5f654a", "#7b8948", "#97b043",
            "#b2d736", "#ceff1a", "#d8e01b", "#dfc11b", "#e2a11b", 
            "#e37f1b", "#e1581a", "#de1a1a")
 
-pal_new<-c('moderate_violet','very_dark_cyan','slightly_desaturated_yellow','moderate_blue','dark_moderate_lime_green','very_dark_pink',
-           'slightly_desaturated_cyan','dark_moderate_blue','fluorescent_orange','mardi_gras','tiffany_blue','blue_yonder','raspberry','vivid_orange','vivid_yellow')
 
-# associate caterpillar richness with map ecoregions
+#### chloropleth map of richness by ecoregion ####
 
-# map ecoregions based on number of species
+# data on lep taxonomy
+lep.info<-read_excel('~/Dropbox/Projects/canada/raw data/212 Lep species.xlsx')%>%
+  distinct(HERB_ID_SP, HERB_family_2019, feeding, SC)
 
-## maps species richness
-provs<-st_read('~/Dropbox/CFIS maps/caterpillar_sites_ecoprovince.shp')%>%st_transform(lcc)%>%select(sp, ecoprovince) # sites categorized by points
+# read in occurrences for all species
+pts.files<-list.files('~/Dropbox/CFIS maps/pts')%>%word(1, sep='_')%>%unique()
+pts.files
+
+pts.in<-do.call(rbind, lapply(pts.files, function(x)st_read(paste0('~/Dropbox/CFIS maps/pts/',x, '_pts.shp'))%>%
+                                mutate(sp = x)%>%st_transform(lcc)))%>%
+  left_join(lep.info, by=c('sp' = 'HERB_ID_SP'))
+
+## intersect collection sites with ecoregion data to calculate species richness
+eco.pts<-pts.in%>%st_intersection(eco.all)
+
+
+# get species richness
+provs<-st_read('~/Dropbox/CFIS maps/caterpillar_sites_ecoprovince.shp')%>%
+  st_transform(lcc)%>%select(sp, ecoprovince) # sites categorized by points
 length(unique(provs$ecoprovince)) ## 35 ecoprovinces ocurring in
-glimpse(provs)
-## almost 50,000 points
+glimpse(provs)## almost 50,000 points across all species
 
 prov.sr<-provs%>%
   st_drop_geometry()%>%

@@ -234,6 +234,31 @@ cat.sites<-cat.sites%>%mutate(sp_rich=rowSums(cat.mat, na.rm=TRUE))%>%filter(sp_
 write.csv(cat.sites, '~/Dropbox/Projects/canada/R/caterpillar_sites_20km.csv', row.names=FALSE)
 
 ## do this for multiple resolutions
+cat.sites
+cat.sites
+
+## plot sites and show relative diversity
+cat.sf<-st_as_sf(cat.sites, coords=c('x','y'), crs=lcc)
+glimpse(cat.sf)
+
+ggplot()+
+  geom_sf(data=outline.bbox, fill=NA, color='black', size=.5)+
+  geom_sf(data=cat.sf, aes(size=sp_rich), alpha=.15, color='darkslateblue')+
+  theme_map()+
+  scale_size_area(max_size=3)+
+  theme(legend.position='none')
+
+ggplot()+
+  geom_sf(data=outline.bbox, fill=NA, color='black', size=.5)+
+  geom_sf(data=cat.sf, aes(alpha=sp_rich), size=1, color='orangered')+
+  theme_map()+
+  scale_alpha_continuous(range=c(.1,1))+
+  theme(legend.position='none')
+
+range(cat.sites$sp_rich) #1 to 68
+
+# how many sites in each ecoregion
+
 
 ####################################################
 # rarefied diversity in each site using the number of sites and the number of species

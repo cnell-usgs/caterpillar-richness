@@ -15,6 +15,7 @@ library(tidyverse)
 library(units)
 library(jcolors)
 
+setwd('/Users/collnell/Dropbox/CFIS maps')
 
 #### read in shapefiles #####
 
@@ -42,9 +43,9 @@ outline<-can.simp%>%group_by()%>%summarize()%>%ms_simplify(keep=0.01) # outline 
 
 # read in and trim to terrestrial only, simplify 
 ecoz<-st_read('/Users/collnell/Dropbox/Projects/canada/Ecozones/Ecozones.shp')%>%
-  dplyr::select(-ZONE_NOM)%>%st_transform(lcc)%>%ms_simplify(keep=0.15)%>%st_intersection(outline)%>%select(ecozone=ZONE_NAME)# convert to Canada Lambert Conformal Conic CRS
-ecor<-st_read('~/Dropbox/CFIS maps//Ecoregions/ecoregions.shp')%>%st_transform(lcc)%>%ms_simplify(keep=0.15)%>%st_intersection(outline)%>%select(ecoregion=REGION_NAM) ## the ecoregion delinations
-ecop<-st_read('~/Dropbox/CFIS maps/Ecoprovinces/ecoprovinces.shp')%>%st_transform(lcc)%>%ms_simplify(keep=0.15)%>%st_intersection(outline)%>%select(ecoprovince=ECOPROVINC)
+  dplyr::select(-ZONE_NOM)%>%st_transform(lcc)%>%ms_simplify(keep=0.15)%>%st_intersection(outline)%>%dplyr::select(ecozone=ZONE_NAME)# convert to Canada Lambert Conformal Conic CRS
+ecor<-st_read('~/Dropbox/CFIS maps//Ecoregions/ecoregions.shp')%>%st_transform(lcc)%>%ms_simplify(keep=0.15)%>%st_intersection(outline)%>%dplyr::select(ecoregion=REGION_NAM) ## the ecoregion delinations
+ecop<-st_read('~/Dropbox/CFIS maps/Ecoprovinces/ecoprovinces.shp')%>%st_transform(lcc)%>%ms_simplify(keep=0.15)%>%st_intersection(outline)%>%dplyr::select(ecoprovince=ECOPROVINC)
 
 ## combine hierarchy
 eco.all<-ecor%>%st_buffer(0)%>%st_intersection(ecoz%>%st_buffer(0))%>%st_buffer(0)
@@ -93,7 +94,7 @@ pts.in$id<-seq(1:length(pts.in$id))
 glimpse(pts.in)
 
 ggplot()+
-  geom_sf(data=pts.in, alpha=.1, size=.1)+
+  geom_sf(data=pts.in, alpha=.1, size=.1, color='darkslateblue')+
   theme_map()
 
 ## intersect collection sites with ecoregion data to calculate species richness
@@ -112,6 +113,7 @@ ecor.rich<-eco.all%>%
   left_join(ecor.r.rich%>%st_drop_geometry)%>%
   mutate(AREA = set_units(st_area(.),km2), dens=as.numeric(sp/AREA)*1000) # get area of each region to calc sp density
 glimpse(ecor.rich)
+base_area<-ecor.rich%>%filter(!is.na(sp))
 
 ## crop with bounding box around region where recorded
 bbox.pts<-st_bbox(ecor.rich%>%filter(!is.na(sp)))
@@ -214,28 +216,23 @@ make_grid<-function(res){
 ## do for each species individually to retain info on composition, combine
 cat.sps<-unique(pts.in$sp)
 
-get_sites<-function(cat, rast.r){
+get_sites<-function(cat){
   sp.r<-rasterize(pts.in%>%filter(sp == cat), rast.r, 'sp', function(x, ...) length(x))%>%
     as.data.frame(xy=TRUE)%>%
     mutate(sp = cat)%>%rename(sites=layer)
   return(sp.r)
 }
 
-
 res<-20
 res<-res*1000
 rast.r<-raster(outline.bbox) # basic raster grid
 res(rast.r)<-res
-cat.sites<-lapply(cat.sps, get_sites)%>%bind_rows%>%
+cat.sites<-lapply(cat.sps, function(x)get_sites(cat=x))%>%bind_rows%>%
   dcast(x+y~sp, value.var='sites') # cast to wide format
 cat.mat<-cat.sites%>%dplyr::select(-x,-y)
 cat.sites<-cat.sites%>%mutate(sp_rich=rowSums(cat.mat, na.rm=TRUE))%>%filter(sp_rich != 0)
 
-write.csv(cat.sites, '~/Dropbox/Projects/canada/R/caterpillar_sites_20km.csv', row.names=FALSE)
-
-## do this for multiple resolutions
-cat.sites
-cat.sites
+write.csv(cat.sites, paste0('~/Dropbox/Projects/canada/R/caterpillar_sites_',res,'km.csv'), row.names=FALSE)
 
 ## plot sites and show relative diversity
 cat.sf<-st_as_sf(cat.sites, coords=c('x','y'), crs=lcc)
@@ -256,8 +253,11 @@ ggplot()+
   theme(legend.position='none')
 
 range(cat.sites$sp_rich) #1 to 68
+mean(cat.sites$sp_rich) # around 7
+glimpse(cat.sites)
+glimpse(pts.in)
 
-# how many sites in each ecoregion
+st_crs(pts.in)
 
 
 ####################################################
@@ -269,4 +269,207 @@ pal_num(3)
 ## species distriution probability
 
 library(unmarked)
+
+
+####################################################
+#### range maps ####
+
+## generate range maps for species based on points 
+# convex hull 
+# minimum area? 
+# maxent 
+# compare product to occurences from natureserve
+
+# organize workspace
+dir.create(path = "sdm_data")
+dir.create(path = "sdm_output")
+
+library(dismo)
+library(maptools)
+library(sp)
+
+# retrieve worldclim bioclim rasters
+bioclim.data <- getData(name = "worldclim",
+                        var = "bio",
+                        res = 2.5,
+                        path = "sdm_data/")
+
+projection(bioclim.data)<-lcc
+bio.proj<-bioclim.data@crs
+
+# Determine geographic extent of our data
+cat.sites<-pts.in%>%st_transform(bio.proj)%>%st_coordinates()%>%as.data.frame
+cat.sites$sp<-pts.in$sp
+cat.sites<-cat.sites%>%dplyr::select(latitude=Y, longitude=X, everything())%>%filter(!is.na(latitude), !is.na(longitude))
+
+max.lat <- ceiling(max(cat.sites$latitude))
+min.lat <- floor(min(cat.sites$latitude))
+max.lon <- ceiling(max(cat.sites$longitude))
+min.lon <- floor(min(cat.sites$longitude))
+geo.extent <- extent(x = c(min.lon, max.lon, min.lat, max.lat))
+
+# Crop bioclim data to geographic extent
+bioclim.data <- crop(x = bioclim.data, y = geo.extent)
+
+# Build species distribution model
+cat.sites.filt<-cat.sites%>%filter(sp == 'HYCU')
+
+# plot
+data(wrld_simpl)
+plot(wrld_simpl, xlim=c(min.lon, max.lon),ylim=c(min.lat,max.lat),axes=TRUE)
+points(x=cat.sites.filt$longitude, y=cat.sites.filt$latitude, pch=20, cex=0.75, col='orange')
+
+# sdm model
+sdm_sites<-cat.sites.filt[,c('longitude','latitude')] # order matters
+bc.model <- bioclim(x = bioclim.data, p = sdm_sites)
+predict.presence<-dismo::predict(object=bc.model, x=bioclim.data, ext=geo.extent)
+
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95")
+
+# Add model probabilities
+plot(predict.presence, add = TRUE)
+
+# Redraw those country borders
+plot(wrld_simpl, add = TRUE, border = "grey5")
+
+# Add original observations
+points(sdm_sites$longitude, sdm_sites$latitude, col = "olivedrab", pch = 20, cex = 0.75)
+box()
+
+## pseudo-absence points
+# Use the bioclim data files for sampling resolution
+bil.files <- list.files(path = "sdm_data/wc2-5", 
+                        pattern = "*.bil$", 
+                        full.names = TRUE)
+
+# We only need one file, so use the first one in the list of .bil files
+mask <- raster(bil.files[1])
+
+# Randomly sample points (same number as our observed points)
+background <- randomPoints(mask = mask,     # Provides resolution of sampling points
+                           n = nrow(sdm_sites),      # Number of random points
+                           ext = geo.extent, # Spatially restricts sampling
+                           extf = 1.25)             # Expands sampling a little bit
+head(background)
+base_area<-base_area%>%st_transform(bio.proj)
+background<-st_sample(base_area, size=nrow(sdm_sites), type='random', exact=TRUE)%>%as('Spatial')
+class(background)
+
+# Plot the base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95",
+     main = "Presence and pseudo-absence points")
+
+# Add the background points
+points(background, col = "orangered", pch = 1, cex = 0.75)
+
+# Add the observations
+points(x = sdm_sites$longitude, 
+       y = sdm_sites$latitude, 
+       col = "blue", 
+       pch = 20, 
+       cex = 0.75)
+
+## training vs test data
+
+# Arbitrarily assign group 1 as the testing data group
+testing.group <- 1
+
+# Create vector of group memberships
+group.presence <- kfold(x = sdm_sites, k = 5) # kfold is in dismo package
+
+# Should see even representation in each group
+table(group.presence)
+
+# Separate observations into training and testing groups
+presence.train <- sdm_sites[group.presence != testing.group, ]
+presence.test <- sdm_sites[group.presence == testing.group, ]
+
+# Repeat the process for pseudo-absence points
+group.background <- kfold(x = background, k = 5)
+background.train <- background[group.background != testing.group, ]
+background.test <- background[group.background == testing.group, ]
+
+# Build a model using training data
+bc.model <- bioclim(x = bioclim.data, p = presence.train)
+
+# Predict presence from model (same as previously, but with the update model)
+predict.presence <- dismo::predict(object = bc.model, 
+                                   x = bioclim.data, 
+                                   ext = geo.extent)
+
+# Use testing data for model evaluation
+bc.eval <- evaluate(p = presence.test,   # The presence testing data
+                    a = background.test, # The absence testing data
+                    model = bc.model,    # The model we are evaluating
+                    x = bioclim.data)    # Climatic variables for use by model
+
+# Determine minimum threshold for "presence"
+bc.threshold <- threshold(x = bc.eval, stat = "spec_sens")
+
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95")
+
+# Only plot areas where probability of occurrence is greater than the threshold
+plot(predict.presence > bc.threshold, 
+     add = TRUE, 
+     legend = FALSE, 
+     col = "olivedrab")
+
+# And add those observations
+points(x = sdm_sites$longitude, 
+       y = sdm_sites$latitude, 
+       col = "black",
+       pch = "+", 
+       cex = 0.75)
+
+# Redraw those country borders
+plot(wrld_simpl, add = TRUE, border = "black")
+box()
+
+predict.presence > bc.threshold
+
+
+# Plot base map
+plot(wrld_simpl, 
+     xlim = c(min.lon, max.lon),
+     ylim = c(min.lat, max.lat),
+     axes = TRUE, 
+     col = "grey95")
+
+# Only plot areas where probability of occurrence is greater than the threshold
+plot(predict.presence > bc.threshold, 
+     add = TRUE, 
+     legend = FALSE, 
+     col = c(NA, "olivedrab"))
+
+# And add those observations
+points(x = sdm_sites$longitude, 
+       y = sdm_sites$latitude, 
+       col = "orange",
+       pch = "+", 
+       cex = 0.75)
+
+# Redraw those country borders
+plot(wrld_simpl, add = TRUE, border = "grey5")
+
+## basic process
+
+## building on
+# pull cliamte data from appropriate time period
+# AUC, model fit
+# test with GBIF data
+# measure total area as geo size
 
